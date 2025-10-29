@@ -1,7 +1,8 @@
 flask
 gunicorn
 requests
-spacy==3.5.3
+spacy==3.7.5
 numpy<1.25
-rapidfuzz
+rapidfuzz==3.9.7
 fpdf
+
