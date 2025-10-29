@@ -1,8 +1,9 @@
-flask
-gunicorn
-requests
+Flask==3.0.3
+requests==2.32.3
 spacy==3.7.5
-numpy<1.25
 rapidfuzz==3.9.7
-fpdf
+fpdf==1.7.2
+gunicorn==21.2.0
+python-dotenv==1.0.1
+
 
