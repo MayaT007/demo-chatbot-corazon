@@ -1,12 +1,7 @@
 flask
 gunicorn
 requests
-spacy
+spacy==3.5.3
+numpy<1.25
 rapidfuzz
 fpdf
-de_core_news_sm @ https://github.com/explosion/spacy-models/releases/download/de_core_news_sm-3.5.0/de_core_news_sm-3.5.0.tar.gz
-
-
-
-
-
