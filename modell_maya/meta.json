@@ -1,0 +1,40 @@
+{
+  "lang":"de",
+  "name":"pipeline",
+  "version":"0.0.0",
+  "spacy_version":">=3.8.5,<3.9.0",
+  "description":"",
+  "author":"",
+  "email":"",
+  "url":"",
+  "license":"",
+  "spacy_git_version":"d0c705c",
+  "vectors":{
+    "width":0,
+    "vectors":0,
+    "keys":0,
+    "name":null,
+    "mode":"default"
+  },
+  "labels":{
+    "textcat":[
+      "rechnung_abfragen",
+      "zahlung_abfragen",
+      "mahnen",
+      "punkte_abfragen",
+      "zahlungsplan_angebot",
+      "adresse_aendern",
+      "kontakt_mitarbeiter",
+      "zahlungsfrist_verlaengern"
+    ]
+  },
+  "pipeline":[
+    "textcat"
+  ],
+  "components":[
+    "textcat"
+  ],
+  "disabled":[
+
+  ]
+}

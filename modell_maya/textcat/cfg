@@ -1,0 +1,14 @@
+{
+  "labels":[
+    "rechnung_abfragen",
+    "zahlung_abfragen",
+    "mahnen",
+    "punkte_abfragen",
+    "zahlungsplan_angebot",
+    "adresse_aendern",
+    "kontakt_mitarbeiter",
+    "zahlungsfrist_verlaengern"
+  ],
+  "threshold":0.0,
+  "positive_label":null
+}
