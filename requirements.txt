@@ -1,6 +1,8 @@
-flask
-gunicorn
-requests
-spacy
-fuzzywuzzy
-fpdf
+flask==2.3.3
+gunicorn==21.2.0
+requests==2.31.0
+spacy==3.7.2
+fuzzywuzzy==0.18.0
+python-Levenshtein==0.25.1   # optional, macht fuzzywuzzy schneller
+fpdf==1.7.2
+
