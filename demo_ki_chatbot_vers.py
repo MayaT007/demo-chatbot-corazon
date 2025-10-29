@@ -1,13 +1,13 @@
 import requests
 import spacy
-from flask import Flask, request, jsonify, send_file, render_template_string
+from flask import Flask, request, jsonify, send_file, render_template
 from datetime import datetime, timedelta
 import os
 from fpdf import FPDF
 import re
 from rapidfuzz import fuzz
 import csv 
-
+import json
 # Lade spaCy Modell
 nlp = spacy.load("./modell_maya")
 
@@ -60,30 +60,98 @@ standard_antworten = {
     "unbekannt": "❓ Ich habe Ihre Anfrage leider nicht verstanden. Können Sie es bitte anders formulieren?"
 }
 
-def erstelle_pdf_rechnung(rechnungsnummer, betrag, status):
-    dateiname = f"pdf_rechnungen/Rechnung_{rechnungsnummer}.pdf"
+def erstelle_ratenplan_pdf(rechnungsnummer, gesamtschuld, monatsrate):
+    dateiname = f"pdf_rechnungen/Ratenplan_{rechnungsnummer}.pdf"
     pdf = FPDF()
     pdf.add_page()
-    pdf.set_font("Arial", size=14)
-    pdf.cell(200, 10, txt=f"Rechnung Nr. {rechnungsnummer}", ln=True, align="C")
-    pdf.ln(10)
-    pdf.cell(200, 10, txt=f"Betrag: {betrag} Euro", ln=True, align="C")
-    pdf.cell(200, 10, txt=f"Status: {status}", ln=True, align="C")
+
+    # Dein Logo einfügen (Pfad anpassen!)
+    logo_pfad = "static/IMG_7829.png"
+    if os.path.exists(logo_pfad):
+        pdf.image(logo_pfad, x=10, y=8, w=30)
+
+    pdf.set_font("Arial", 'B', 16)
+    pdf.cell(0, 10, "Ratenzahlungsvereinbarung", ln=True, align="C")
+    pdf.ln(20)
+
+    pdf.set_font("Arial", size=12)
+    pdf.cell(0, 10, f"Rechnungsnummer: {rechnungsnummer}", ln=True)
+    pdf.cell(0, 10, f"Gesamtschulden: {gesamtschuld:.2f} Euro", ln=True)
+    pdf.cell(0, 10, f"Vorgeschlagene Monatsrate: {monatsrate:.2f} Euro", ln=True)
+
+    laufzeit = int(gesamtschuld // monatsrate)
+    if gesamtschuld % monatsrate > 0:
+        laufzeit += 1
+
+    pdf.cell(0, 10, f"Voraussichtliche Laufzeit: {laufzeit} Monate", ln=True)
+
+    pdf.ln(20)
+    pdf.multi_cell(0, 10, "Bitte bestätigen Sie diesen Ratenzahlungsplan, indem Sie das folgende Dokument unterschreiben und zurücksenden.\n\n_____________________________\nUnterschrift")
+
     pdf.output(dateiname)
     return dateiname
 
+
 def verstehe_absicht(text):
+    text = text.lower()
+
+    # 1. Schlüsselwörter sofort erkennen
+    if any(wort in text for wort in ["ratenzahlung", "teilzahlung", "rate vereinbaren"]):
+        return "zahlungsplan_angebot"
+    if any(wort in text for wort in ["rechnung", "rechnungsnummer"]):
+        return "rechnung_abfragen"
+    if any(wort in text for wort in ["zahlung eingegangen", "zahlung bestätigt", "zahlung erfolgt"]):
+        return "zahlung_abfragen"
+    if any(wort in text for wort in ["mahnung", "mahnen"]):
+        return "mahnen"
+    if any(wort in text for wort in ["punkte", "punktestand", "bonuspunkte"]):
+        return "punkte_abfragen"
+    if any(wort in text for wort in ["adresse ändern", "anschrift ändern", "neue adresse"]):
+        return "adresse_aendern"
+    if any(wort in text for wort in ["mitarbeiter sprechen", "support kontaktieren", "callcenter"]):
+        return "kontakt_mitarbeiter"
+
+    # 2. Wenn keine direkten Keywords: dann NLP-Modell verwenden
     doc = nlp(text)
     absichten = doc.cats
     beste_absicht = max(absichten, key=absichten.get)
+
     return beste_absicht
 
+
 def speichere_chat(user_text, bot_text):
-    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    filename = f"chat_logs/chatverlauf_{timestamp}.txt"
-    with open(filename, "a", encoding="utf-8") as f:
-        f.write(f"User: {user_text}\n")
-        f.write(f"Maya: {bot_text}\n\n")
+    heute = datetime.now().strftime("%Y%m%d")  # z.B. 20240429
+    dateiname = f"chat_logs/chat_{heute}.json"
+
+    eintrag_user = {
+        "zeit": datetime.now().strftime("%d.%m.%Y %H:%M"),
+        "sender": "Benutzer",
+        "nachricht": user_text
+    }
+
+    eintrag_bot = {
+        "zeit": datetime.now().strftime("%d.%m.%Y %H:%M"),
+        "sender": "Maya",
+        "nachricht": bot_text
+    }
+
+    daten = []
+
+    # Bestehende Datei laden (falls vorhanden)
+    if os.path.exists(dateiname):
+        with open(dateiname, "r", encoding="utf-8") as f:
+            try:
+                daten = json.load(f)
+            except json.JSONDecodeError:
+                daten = []
+
+    # Neue Einträge hinzufügen
+    daten.append(eintrag_user)
+    daten.append(eintrag_bot)
+
+    # Datei speichern
+    with open(dateiname, "w", encoding="utf-8") as f:
+        json.dump(daten, f, indent=4, ensure_ascii=False)
 
 def erkenne_entity(text):
     betraege = re.findall(r"\d+[.,]?\d*\s*€?", text)
@@ -97,6 +165,27 @@ def finde_aehnliche_frage(benutzertext):
         if score > 90:
             return antwort
     return None
+
+def erkenne_stimmung(text):
+    text = text.lower()
+    if any(wort in text for wort in ["schlimm", "verzweifelt", "hilfe", "weiß nicht weiter", "problem", "ängstlich"]):
+        return "traurig"
+    elif any(wort in text for wort in ["wütend", "unverschämtheit", "schon 5x", "beschwerde", "sauer", "genervt"]):
+        return "frustriert"
+    elif any(wort in text for wort in ["bitte", "guten tag", "hallo", "danke", "freundlich", "grüße"]):
+        return "freundlich"
+    else:
+        return "neutral"
+
+def stimmung_anpassen(antwort, stimmung):
+    if stimmung == "frustriert":
+        antwort += " 🙏 Ich verstehe Ihren Ärger. Ich kümmere mich sofort darum!"
+    elif stimmung == "traurig":
+        antwort += " 💬 Keine Sorge, wir finden gemeinsam eine Lösung!"
+    elif stimmung == "freundlich":
+        antwort += " 😊 Vielen Dank für Ihre freundliche Anfrage."
+    return antwort
+
 
 def ticket_erstellen(benutzertext, absicht):
     if not os.path.exists('tickets'):
@@ -129,8 +218,10 @@ def download_pdf(filename):
 def chat():
     daten = request.get_json()
     benutzertext = daten.get("nachricht", "").lower()
+    
     user_id = daten.get("user_id", "default")
-
+    stimmung = erkenne_stimmung(benutzertext)
+    print(f"DEBUG: erkannte Stimmung: {stimmung}")
     entities = erkenne_entity(benutzertext)
 
     if user_id not in benutzer_status:
@@ -201,7 +292,125 @@ def chat():
             antwort = "❗ Fehler beim Abrufen der Rechnungsdaten."
         return send_response(benutzertext, antwort)
 
+    # ➔ Prüfe auf Monatsratenstatus
+    if status["status"] == "warte_auf_monatsrate":
+        
+
+        entities = erkenne_entity(benutzertext)
+        betraege = entities.get("betrag", [])
+
+        if betraege:
+            eingabe_betrag = betraege[0].replace("€", "").replace(",", ".").strip()
+            try:
+                monatliche_rate = float(eingabe_betrag)
+
+                if monatliche_rate < 30:
+                    status["status"] = "warte_auf_vorschlagsrate"
+                    status["vorschlaege"] = [30, 40, 50]
+                    antwort = {
+                        "de": "❗ Die monatliche Rate ist zu niedrig.\n"
+                              "💬 Vorschläge: 30€, 40€, 50€.\n"
+                              "Bitte wählen Sie einen Betrag aus.",
+                        "en": "❗ The monthly installment is too low.\n"
+                              "💬 Suggestions: 30€, 40€, 50€.\n"
+                              "Please choose an amount."
+                    }[benutzer_status[user_id]["sprache"]]
+                else:
+                    gesamtschuld = 300.0
+
+                    laufzeit_monate = int(gesamtschuld // monatliche_rate)
+                    if gesamtschuld % monatliche_rate > 0:
+                        laufzeit_monate += 1
+
+                    rechnungsnummer = "RATENPLAN_" + datetime.now().strftime("%Y%m%d%H%M%S")
+                    pdf_dateiname = erstelle_ratenplan_pdf(rechnungsnummer, gesamtschuld, monatliche_rate)
+
+                    download_link = "/download/" + os.path.basename(pdf_dateiname)
+
+                    antworten = {
+                        "de": "✅ Ihr Zahlungsplan mit {:.2f}€/Monat wurde vorgemerkt.<br>"
+                              "Voraussichtliche Laufzeit: {} Monate.<br><br>"
+                              '<a href="{}" style="display:inline-block; background-color:#e74c3c; color:white; padding:8px 16px; text-align:center; text-decoration:none; font-size:14px; border-radius:12px;">📄 Ratenplan herunterladen</a>'.format(monatliche_rate, laufzeit_monate, download_link),
+                        "en": "✅ Your installment plan with {:.2f}€/month has been noted.<br>"
+                              "Expected duration: {} months.<br><br>"
+                              '<a href="{}" style="display:inline-block; background-color:#e74c3c; color:white; padding:8px 16px; text-align:center; text-decoration:none; font-size:14px; border-radius:12px;">📄 Download Installment Plan</a>'.format(monatliche_rate, laufzeit_monate, download_link)
+                    }
+
+                    antwort = antworten[benutzer_status[user_id]["sprache"]]
+                    status["status"] = "normal"
+
+            except ValueError:
+                antwort = {
+                    "de": "❗ Ungültiger Betrag. Bitte geben Sie eine Zahl an (z.B. 50).",
+                    "en": "❗ Invalid amount. Please enter a number (e.g., 50)."
+                }[benutzer_status[user_id]["sprache"]]
+        else:
+            antwort = {
+                "de": "❗ Bitte geben Sie eine gültige Monatsrate in Euro an.",
+                "en": "❗ Please provide a valid monthly amount in Euros."
+            }[benutzer_status[user_id]["sprache"]]
+
+        return send_response(benutzertext, antwort)
+
+    # ➔ Prüfe auf Vorschlagsrate
+    if status["status"] == "warte_auf_vorschlagsrate":
+        
+
+        entities = erkenne_entity(benutzertext)
+        betraege = entities.get("betrag", [])
+
+        if betraege:
+            eingabe_betrag = betraege[0].replace("€", "").replace(",", ".").strip()
+            try:
+                neue_rate = float(eingabe_betrag)
+                print("DEBUG: Betrag erkannt:", neue_rate)
+
+                if neue_rate in status.get("vorschlaege", []):
+                    gesamtschuld = 300.0
+
+                    laufzeit_monate = int(gesamtschuld // neue_rate)
+                    if gesamtschuld % neue_rate > 0:
+                        laufzeit_monate += 1
+
+                    rechnungsnummer = "RATENPLAN_" + datetime.now().strftime("%Y%m%d%H%M%S")
+                    pdf_dateiname = erstelle_ratenplan_pdf(rechnungsnummer, gesamtschuld, neue_rate)
+
+                    download_link = "/download/" + os.path.basename(pdf_dateiname)
+
+                    antworten = {
+                        "de": "✅ Ihr Zahlungsplan mit {:.2f}€/Monat wurde erstellt.<br>"
+                              "Voraussichtliche Laufzeit: {} Monate.<br><br>"
+                              '<a href="{}" style="display:inline-block; background-color:#e74c3c; color:white; padding:8px 16px; text-align:center; text-decoration:none; font-size:14px; border-radius:12px;">📄 Ratenplan herunterladen</a>'.format(neue_rate, laufzeit_monate, download_link),
+                        "en": "✅ Your installment plan with {:.2f}€/month has been created.<br>"
+                              "Expected duration: {} months.<br><br>"
+                              '<a href="{}" style="display:inline-block; background-color:#e74c3c; color:white; padding:8px 16px; text-align:center; text-decoration:none; font-size:14px; border-radius:12px;">📄 Download Installment Plan</a>'.format(neue_rate, laufzeit_monate, download_link)
+                    }
+
+                    antwort = antworten[benutzer_status[user_id]["sprache"]]
+                    status["status"] = "normal"
+
+                else:
+                    antwort = {
+                        "de": "❗ Bitte wählen Sie eine gültige vorgeschlagene Rate (30€, 40€, 50€).",
+                        "en": "❗ Please choose one of the suggested rates (30€, 40€, or 50€)."
+                    }[benutzer_status[user_id]["sprache"]]
+            except ValueError:
+                antwort = {
+                    "de": "❗ Ungültige Eingabe. Bitte geben Sie eine gültige Zahl an.",
+                    "en": "❗ Invalid input. Please enter a valid number."
+                }[benutzer_status[user_id]["sprache"]]
+        else:
+            antwort = {
+                "de": "❗ Bitte geben Sie eine gültige Zahl an (z.B. 30, 40, 50).",
+                "en": "❗ Please enter a valid number (e.g., 30, 40, 50)."
+            }[benutzer_status[user_id]["sprache"]]
+
+        return send_response(benutzertext, antwort)
+
+    # ➔ Standard: Normal weiter mit Intent-Handling
+  
     absicht = verstehe_absicht(benutzertext)
+
 
     if absicht == "rechnung_abfragen":
         antwort = {
@@ -220,6 +429,8 @@ def chat():
             "de": "✅ Ihre Zahlung ist eingegangen. Vielen Dank!",
             "en": "✅ Your payment has been received. Thank you!"
         }[benutzer_status[user_id]["sprache"]]
+        antwort = stimmung_anpassen(antwort, stimmung)
+
     elif absicht in ["mahnen", "kontakt_mitarbeiter", "zahlungsfrist_verlaengern"]:
         antwort = {
             "de": "📞 Ihre Anfrage wird an unser Team weitergeleitet. Sie erhalten bald eine Rückmeldung.",
@@ -244,6 +455,8 @@ def chat():
             "en": "❓ I didn't quite understand your request."
         }[benutzer_status[user_id]["sprache"]]
 
+    
+    antwort = stimmung_anpassen(antwort, stimmung)
     return send_response(benutzertext, antwort)
 
 def send_response(benutzertext, antwort):
@@ -254,311 +467,118 @@ def send_response(benutzertext, antwort):
 
 @app.route("/download/<path:filename>")
 def download_file(filename):
-    return send_file(filename, as_attachment=True)
+    pfad = os.path.join("pdf_rechnungen", filename)
+    return send_file(pfad, as_attachment=True)
 
 @app.route("/")
 def index():
     begruessungstext = "Willkommen! Ich bin Maya, Ihre KI-Assistentin. Ich helfe Ihnen bei Rechnungen, Inkasso und Mahnungen."
-    return render_template_string("""
-<!DOCTYPE html>
-<html lang="de">
-<head>
-<meta charset="UTF-8">
-<title>KI Assist - Maya</title>
+    return render_template("index.html", begruessungstext=begruessungstext)
 
-<link rel="icon" type="image/png" href="{{ url_for('static', filename='IMG_7829.png') }}">
-<link href="https://fonts.googleapis.com/css2?family=Roboto&display=swap" rel="stylesheet">
 
-<style>
-body {
-    font-family: 'Roboto', sans-serif;
-    background: #ecf0f1;
-    margin: 0;
-    padding: 0;
-    height: 100vh;
-    overflow: hidden;
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    transition: background 0.5s, color 0.5s;
-}
-body.dark-mode {
-    background: #2c3e50;
-    color: white;
-}
+@app.route("/tickets")
+def tickets_dashboard():
+    ticket_datei = "tickets/tickets.csv"
+    tickets = []
 
-/* Popup */
-#popup {
-    display: flex;
-    position: fixed;
-    top: 0; left: 0;
-    width: 100%; height: 100%;
-    background: rgba(0,0,0,0.5);
-    justify-content: center;
-    align-items: center;
-    z-index: 2000;
-    animation: fadeIn 1s ease-in-out;
-}
-@keyframes fadeIn {
-    from { opacity: 0; }
-    to { opacity: 1; }
-}
-#popup-content {
-    background: white;
-    padding: 40px 30px;
-    border-radius: 20px;
-    width: 400px;
-    text-align: center;
-    box-shadow: 0 8px 30px rgba(0,0,0,0.2);
-}
-#popup-content img {
-    width: 120px;
-    margin-bottom: 20px;
-}
-#popup-content h2 {
-    margin: 10px 0;
-}
-#popup-content button {
-    background: #A3B9D2;
-    color: white;
-    padding: 10px 20px;
-    border-radius: 20px;
-    border: none;
-    margin-top: 10px;
-    cursor: pointer;
-    font-size: 16px;
-    transition: background 0.3s ease;
-}
-#popup-content button:hover {
-    background: #869bb5;
-}
-#popup-content select {
-    margin-top: 10px;
-    padding: 8px 16px;
-    border-radius: 15px;
-    border: 1px solid #ccc;
-}
+    if os.path.exists(ticket_datei):
+        with open(ticket_datei, mode='r', encoding='utf-8') as file:
+            reader = csv.DictReader(file)
+            for zeile in reader:
+                tickets.append(zeile)
 
-/* Chat */
-.chat-container {
-    display: none;
-    flex-direction: column;
-    width: 420px;
-    height: 650px;
-    background: white;
-    border-radius: 20px;
-    box-shadow: 0 8px 20px rgba(0,0,0,0.2);
-    overflow: hidden;
-}
-.chat-header, .chat-footer, .chat-body {
-    padding: 10px;
-}
-.chat-header {
-    background: #A3B9D2;
-    color: white;
-    display: flex;
-    align-items: center;
-    gap: 10px;
-}
-.chat-header img {
-    width: 60px;
-    height: 60px;
-    border-radius: 50%;
-}
-.chat-body {
-    flex: 1;
-    background: #f7f9fa;
-    overflow-y: auto;
-    display: flex;
-    flex-direction: column;
-}
-.chat-footer {
-    background: #ecf0f1;
-    display: flex;
-}
-.chat-input {
-    flex: 1;
-    border-radius: 25px;
-    border: 1px solid #ccc;
-    padding: 10px;
-}
-.send-btn {
-    background: url('https://cdn-icons-png.flaticon.com/512/60/60525.png') no-repeat center;
-    background-size: cover;
-    width: 40px;
-    height: 40px;
-    border: none;
-    margin-left: 10px;
-    cursor: pointer;
-}
-.bot-message, .user-message {
-    margin: 8px 0;
-    padding: 10px 14px;
-    border-radius: 20px;
-    max-width: 70%;
-    display: flex;
-    align-items: center;
-    font-size: 14px;
-}
-.bot-message {
-    background-color: #e6f9e6;
-}
-.user-message {
-    background-color: #d0e6ff;
-    margin-left: auto;
-}
-.bot-message img, .user-message img {
-    width: 30px;
-    height: 30px;
-    border-radius: 50%;
-    margin-right: 8px;
-}
-.user-message img {
-    margin-left: 8px;
-    margin-right: 0;
-}
-.quick-buttons {
-    text-align: center;
-    padding: 10px;
-}
-.quick-buttons button {
-    margin: 5px;
-    padding: 8px 18px;
-    border: none;
-    border-radius: 20px;
-    background: #A3B9D2;
-    color: white;
-    cursor: pointer;
-    font-size: 14px;
-    box-shadow: 0 4px 6px rgba(93,173,226,0.3);
-    transition: background 0.3s;
-}
-.quick-buttons button:hover {
-    background: #869bb5;
-}
-</style>
-</head>
+    return render_template("tickets.html", tickets=tickets)
 
-<body>
+from flask import request
 
-<!-- 🌟 Popup - Willkommen -->
-<div id="popup" style="display: flex;">
-    <div id="popup-content">
-        <img src="{{ url_for('static', filename='IMG_7829.png') }}" alt="Logo">
-        <h2>Willkommen bei Maya!</h2>
-        <p>Bitte akzeptieren Sie die <a href="#" onclick="openTerms()">Nutzungsbedingungen</a>:</p>
-        <label><input type="checkbox" id="agb-check"> Ich akzeptiere</label><br><br>
-        <select id="language-select">
-            <option value="de">Deutsch</option>
-            <option value="en">English</option>
-        </select><br><br>
-        <button id="start-chat">Chat starten</button><br><br>
-        <button onclick="toggleDarkMode()">🌙 / ☀️</button>
-    </div>
-</div>
+@app.route("/update_ticket", methods=["POST"])
+def update_ticket():
+    daten = request.get_json()
+    ticket_id = daten.get("ticket_id")
 
-<!-- 🌟 Chat-Container -->
-<div class="chat-container" id="chat-container" style="display: none;">
-    <div class="chat-header">
-        <img src="{{ url_for('static', filename='IMG_7829.png') }}" alt="Logo">
-        <div class="text-container">
-            <h2>KI Assist - Maya</h2>
-            <p>{{ begruessungstext }}</p>
-        </div>
-    </div>
+    if not ticket_id:
+        return jsonify({"success": False, "message": "Ticket-ID fehlt."}), 400
 
-    <div class="chat-body" id="chatBody">
-        <div class="bot-message">
-            <img src="{{ url_for('static', filename='avatarmya.jpg') }}" alt="Bot Avatar">
-            Hallo, wie kann ich Ihnen helfen?
-        </div>
-    </div>
+    ticket_datei = "tickets/tickets.csv"
+    tickets = []
 
-    <div class="chat-footer">
-        <input type="text" id="userInput" class="chat-input" placeholder="Ihre Nachricht..." onkeypress="checkEnter(event)">
-        <button class="send-btn" onclick="sendMessage()"></button>
-    </div>
+    # Lade existierende Tickets
+    if os.path.exists(ticket_datei):
+        with open(ticket_datei, mode="r", encoding="utf-8") as file:
+            reader = csv.DictReader(file)
+            tickets = list(reader)
 
-    <div class="quick-buttons">
-        <button onclick="quickAsk('Wie lautet meine Rechnungsnummer?')">Rechnungsnummer</button>
-        <button onclick="quickAsk('Ich möchte wissen, ob meine Zahlung eingegangen ist.')">Zahlung prüfen</button>
-        <button onclick="quickAsk('Wann bekomme ich eine Mahnung?')">Mahnung</button>
-        <button onclick="quickAsk('Ich habe einen Inkassofall, was soll ich tun?')">Inkasso</button>
-        <button onclick="quickAsk('Ich möchte eine Teilzahlung vereinbaren.')">Teilzahlung</button>
-    </div>
-</div>
+    # Ticket suchen und Status ändern
+    updated = False
+    for ticket in tickets:
+        if ticket["Ticket-ID"] == ticket_id:
+            ticket["Status"] = "Erledigt"
+            updated = True
+            break
 
-<script>
-document.addEventListener('DOMContentLoaded', function() {
-    const startButton = document.getElementById('start-chat');
+    # Datei neu schreiben
+    if updated:
+        with open(ticket_datei, mode="w", newline="", encoding="utf-8") as file:
+            fieldnames = ["Ticket-ID", "Zeit", "Absicht", "Anfrage", "Status"]
+            writer = csv.DictWriter(file, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(tickets)
+        return jsonify({"success": True})
+    else:
+        return jsonify({"success": False, "message": "Ticket nicht gefunden."}), 404
 
-    startButton.addEventListener('click', function() {
-        const agbCheck = document.getElementById('agb-check');
-        if (!agbCheck.checked) {
-            alert('Bitte akzeptieren Sie die Nutzungsbedingungen.');
-            return;
-        }
+@app.route("/download_tickets")
+def download_tickets():
+    ticket_datei = "tickets/tickets.csv"
+    if os.path.exists(ticket_datei):
+        return send_file(ticket_datei, as_attachment=True)
+    else:
+        return "Keine Tickets vorhanden.", 404
 
-        document.getElementById('popup').style.display = 'none';
-        document.getElementById('chat-container').style.display = 'flex';
-    });
+@app.route("/chatlogs", methods=["GET", "POST"])
+def chatlogs():
+    chat_ordner = "chat_logs"
+    chat_dateien = []
+    suchbegriff = ""  # Initialize with a default value
 
-    const userSound = new Audio('https://actions.google.com/sounds/v1/cartoon/wood_plank_flicks.ogg');
-    const botSound = new Audio('https://actions.google.com/sounds/v1/cartoon/pop.ogg');
+    # List available chat files
+    if os.path.exists(chat_ordner):
+        chat_dateien = sorted(f for f in os.listdir(chat_ordner) if f.endswith(".json"))
 
-    function sendMessage() {
-        const input = document.getElementById('userInput');
-        const message = input.value.trim();
-        if (message === '') return;
+    ergebnisse = []
+    ausgewaehlte_datei = None
 
-        const chatBody = document.getElementById('chatBody');
-        chatBody.innerHTML += `<div class="user-message"><div>${message}</div><img src="/static/avatarmya.jpg" alt="User Avatar"></div>`;
-        userSound.play();
-        input.value = '';
+    # Handle POST (search/filter action)
+    if request.method == "POST":
+        ausgewaehlte_datei = request.form.get("datei")
+        suchbegriff = request.form.get("suchbegriff", "").lower()  # Update from form
 
-        chatBody.scrollTop = chatBody.scrollHeight;
+        # Load and filter selected chat file
+        if ausgewaehlte_datei:
+            dateipfad = os.path.join(chat_ordner, ausgewaehlte_datei)
+            if os.path.exists(dateipfad):
+                with open(dateipfad, "r", encoding="utf-8") as f:
+                    daten = json.load(f)
+                ergebnisse = [eintrag for eintrag in daten if suchbegriff in eintrag["nachricht"].lower()]
 
-        setTimeout(() => {
-            fetch('/chat', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ nachricht: message })
-            })
-            .then(response => response.json())
-            .then(data => {
-    botSound.play();
-    let botAntwort = data.antwort;
+    # Always pass 'suchbegriff' to the template (now safely defined)
+    return render_template(
+        "chatlogs.html",
+        chat_dateien=chat_dateien,
+        ergebnisse=ergebnisse,
+        ausgewaehlte_datei=ausgewaehlte_datei,
+        suchbegriff=suchbegriff
+    )
 
-    // Links automatisch anklickbar machen
-    botAntwort = botAntwort.replace(/\\[([^\\]]+)\\]\\(([^\\)]+)\\)/g, '<a href="$2" target="_blank">$1</a>');
 
-    chatBody.innerHTML += `<div class="bot-message"><img src="/static/avatarmya.jpg" alt="Bot Avatar"><div>${botAntwort}</div></div>`;
-    chatBody.scrollTop = chatBody.scrollHeight;
-            })
-            .catch(error => {
-                chatBody.innerHTML += `<div class="bot-message"><div>❗ Fehler bei der Antwort. Bitte versuchen Sie es erneut.</div></div>`;
-            });
-        }, 1200);
-    }
+@app.route("/download_chatlog/<filename>")
+def download_chatlog(filename):
+    pfad = os.path.join("chat_logs", filename)
+    if os.path.exists(pfad):
+        return send_file(pfad, as_attachment=True)
+    else:
+        return "Datei nicht gefunden.", 404
 
-    const inputField = document.getElementById('userInput');
-    inputField.addEventListener('keypress', function(event) {
-        if (event.key === 'Enter') {
-            sendMessage();
-        }
-    });
-
-    window.quickAsk = function(text) {
-        inputField.value = text;
-        sendMessage();
-    }
-});
-</script>
-
-</body>
-</html>
-""", begruessungstext=begruessungstext)
 
 if __name__ == "__main__":
     app.run(debug=True)
-
