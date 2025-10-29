@@ -131,7 +131,7 @@ def verstehe_absicht(text):
     if any(w in t for w in ["frist", "verlängerung", "aufschub", "zahlung verschieben"]):
         return "zahlungsfrist_verlaengern"
 
-      try:
+    try:
         doc = nlp(t)
         absichten = getattr(doc, "cats", None) or {}
         if absichten:
@@ -602,6 +602,7 @@ def download_chatlog(filename):
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))  # Render gibt PORT vor
     app.run(host="0.0.0.0", port=port, debug=False)
+
 
 
 
