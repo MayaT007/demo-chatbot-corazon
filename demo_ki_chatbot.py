@@ -9,7 +9,24 @@ from rapidfuzz import fuzz
 import csv 
 
 # Lade spaCy Modell
-nlp = spacy.load("./modell_maya")
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+def load_nlp():
+    # 1) Versuche dein lokales, trainiertes Modell
+    try:
+        return spacy.load(os.path.join(BASE_DIR, "modell_maya"))
+    except Exception as e:
+        print("[spaCy] modell_maya nicht geladen:", e)
+
+    # 2) Fallback: kleines deutsches Standardmodell
+    try:
+        return spacy.load("de_core_news_sm")
+    except Exception:
+        import spacy.cli
+        spacy.cli.download("de_core_news_sm")
+        return spacy.load("de_core_news_sm")
+
+nlp = load_nlp()
 
 app = Flask(__name__)
 app.secret_key = "geheimeschluessel"
@@ -561,4 +578,5 @@ document.addEventListener('DOMContentLoaded', function() {
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
