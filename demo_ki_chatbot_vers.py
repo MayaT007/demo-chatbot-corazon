@@ -9,7 +9,7 @@ from rapidfuzz import fuzz
 import csv 
 import json
 # Lade spaCy Modell
-nlp = spacy.load("de_core_news_sm")
+nlp = spacy.load("./modell_maya")
 
 app = Flask(__name__)
 app.secret_key = "geheimeschluessel"
@@ -582,4 +582,5 @@ def download_chatlog(filename):
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
