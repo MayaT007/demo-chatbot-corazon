@@ -1,1 +1,1 @@
-web: gunicorn demo_ki_chatbot vers:app
+web: gunicorn demo_ki_chatbot_vers:app
