@@ -9,7 +9,22 @@ from rapidfuzz import fuzz
 import csv 
 import json
 # Lade spaCy Modell
-nlp = spacy.load("./modell_maya")
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+def load_nlp():
+    try:
+        return spacy.load(os.path.join(BASE_DIR, "modell_maya"))  # dein Modell
+    except Exception as e:
+        print("[spaCy] modell_maya nicht geladen:", e)
+        # Fallback (nur falls du willst):
+        try:
+            return spacy.load("de_core_news_sm")
+        except Exception:
+            import spacy.cli
+            spacy.cli.download("de_core_news_sm")
+            return spacy.load("de_core_news_sm")
+
+nlp = load_nlp()
 
 app = Flask(__name__)
 app.secret_key = "geheimeschluessel"
@@ -581,6 +596,9 @@ def download_chatlog(filename):
 
 
 if __name__ == "__main__":
-    app.run(debug=True)
+    port = int(os.environ.get("PORT", 5000))  # Render gibt PORT vor
+    app.run(host="0.0.0.0", port=port, debug=False)
+
+
 
 
