@@ -12,11 +12,14 @@ import csv
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 def load_nlp():
-    # 1) Versuche dein lokales, trainiertes Modell
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+    local_model = os.path.join(BASE_DIR, "modell_maya")
+
+    # 1) Lokales Modell versuchen
     try:
-        return spacy.load(os.path.join(BASE_DIR, "modell_maya"))
+        return spacy.load(local_model)
     except Exception as e:
-        print("[spaCy] modell_maya nicht geladen:", e)
+        print(f"[spaCy] modell_maya nicht geladen: {e}")
 
     # 2) Fallback: kleines deutsches Standardmodell
     try:
@@ -578,5 +581,6 @@ document.addEventListener('DOMContentLoaded', function() {
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
