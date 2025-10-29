@@ -1,8 +1,11 @@
 flask==2.3.3
 gunicorn==21.2.0
 requests==2.31.0
-spacy==3.5.3
 rapidfuzz==3.9.6
 fpdf==1.7.2
 numpy<2
+spacy>=3.5.0
+de_core_news_sm @ https://github.com/explosion/spacy-models/releases/download/de_core_news_sm-3.5.0/de_core_news_sm-3.5.0.tar.gz
+
+
 
