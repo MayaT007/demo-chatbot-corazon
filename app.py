@@ -1,21 +1,25 @@
 from flask import Flask, jsonify
 import sqlite3
 
-
 app = Flask(__name__)
+
+# Startseite
+@app.route("/")
+def index():
+    return "Chatbot läuft! 🚀"
 
 # API-Endpunkt zum Abrufen der Rechnungsinformationen
 @app.route('/api/rechnung/<rechnungsnummer>', methods=['GET'])
 def get_rechnung(rechnungsnummer):
-    # Mit der SQLite-Datenbank verbinden
-    conn = sqlite3.connect('mock_db.db')
-    c = conn.cursor()
-    
-    # Führe eine SQL-Abfrage aus, um die Rechnungsdaten abzurufen
-    c.execute("SELECT * FROM rechnungen WHERE rechnungsnummer = ?", (rechnungsnummer,))
-    result = c.fetchone()
-    
-    # Wenn die Rechnung gefunden wird
+    try:
+        conn = sqlite3.connect('mock_db.db')
+        c = conn.cursor()
+        c.execute("SELECT * FROM rechnungen WHERE rechnungsnummer = ?", (rechnungsnummer,))
+        result = c.fetchone()
+        conn.close()
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
     if result:
         rechnungsdaten = {
             "rechnungsnummer": result[1],
@@ -26,6 +30,8 @@ def get_rechnung(rechnungsnummer):
     else:
         return jsonify({"error": "Rechnung nicht gefunden"}), 404
 
-# API starten
+# Nur für lokalen Start (Render nutzt Gunicorn)
 if __name__ == '__main__':
-    app.run(port=5001)
+    app.run(debug=True)
+
+
