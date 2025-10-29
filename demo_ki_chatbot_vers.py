@@ -8,6 +8,9 @@ import re
 from rapidfuzz import fuzz
 import csv 
 import json
+
+API_BASE = os.environ.get("INVOICE_API_URL", "").rstrip("/")
+
 # Lade spaCy Modell
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -108,30 +111,37 @@ def erstelle_ratenplan_pdf(rechnungsnummer, gesamtschuld, monatsrate):
 
 
 def verstehe_absicht(text):
-    text = text.lower()
+    t = text.lower()
 
-    # 1. Schlüsselwörter sofort erkennen
-    if any(wort in text for wort in ["ratenzahlung", "teilzahlung", "rate vereinbaren"]):
+    # Regelbasiert (deine bestehenden Schlüsselwörter – funktioniert schon gut)
+    if any(w in t for w in ["ratenzahlung", "teilzahlung", "rate vereinbaren", "zahlungsplan", "in raten"]):
         return "zahlungsplan_angebot"
-    if any(wort in text for wort in ["rechnung", "rechnungsnummer"]):
+    if any(w in t for w in ["rechnung", "rechnungsnummer", "invoice", "bill"]):
         return "rechnung_abfragen"
-    if any(wort in text for wort in ["zahlung eingegangen", "zahlung bestätigt", "zahlung erfolgt"]):
+    if any(w in t for w in ["zahlung eingegangen", "zahlung bestätigt", "zahlung erfolgt", "habe bezahlt"]):
         return "zahlung_abfragen"
-    if any(wort in text for wort in ["mahnung", "mahnen"]):
+    if any(w in t for w in ["mahnung", "mahnen", "zahlungserinnerung"]):
         return "mahnen"
-    if any(wort in text for wort in ["punkte", "punktestand", "bonuspunkte"]):
+    if any(w in t for w in ["punkte", "punktestand", "bonuspunkte"]):
         return "punkte_abfragen"
-    if any(wort in text for wort in ["adresse ändern", "anschrift ändern", "neue adresse"]):
+    if any(w in t for w in ["adresse ändern", "anschrift ändern", "neue adresse", "adressänderung"]):
         return "adresse_aendern"
-    if any(wort in text for wort in ["mitarbeiter sprechen", "support kontaktieren", "callcenter"]):
+    if any(w in t for w in ["mitarbeiter sprechen", "support kontaktieren", "callcenter", "mit mensch sprechen", "berater"]):
         return "kontakt_mitarbeiter"
+    if any(w in t for w in ["frist", "verlängerung", "aufschub", "zahlung verschieben"]):
+        return "zahlungsfrist_verlaengern"
 
-    # 2. Wenn keine direkten Keywords: dann NLP-Modell verwenden
-    doc = nlp(text)
-    absichten = doc.cats
-    beste_absicht = max(absichten, key=absichten.get)
+      try:
+        doc = nlp(t)
+        absichten = getattr(doc, "cats", None) or {}
+        if absichten:
+            beste_absicht = max(absichten, key=absichten.get)
+            if absichten[beste_absicht] >= 0.6:
+                return beste_absicht
+    except Exception:
+        pass
 
-    return beste_absicht
+    return "unbekannt"
 
 
 def speichere_chat(user_text, bot_text):
@@ -177,7 +187,7 @@ def finde_aehnliche_frage(benutzertext):
     benutzertext = benutzertext.strip().lower()
     for frage, antwort in faq_daten.items():
         score = fuzz.partial_ratio(benutzertext, frage.lower())
-        if score > 90:
+        if score > 75:
             return antwort
     return None
 
@@ -223,12 +233,6 @@ def ticket_erstellen(benutzertext, absicht):
         writer = csv.writer(file)
         writer.writerow(ticket_daten)
 
-
-@app.route("/download/<filename>")
-def download_pdf(filename):
-    pfad = os.path.join("pdf_rechnungen", filename)
-    return send_file(pfad, as_attachment=True)
-
 @app.route("/chat", methods=["POST"])
 def chat():
     daten = request.get_json()
@@ -270,7 +274,7 @@ def chat():
         if entities["rechnungsnummer"]:
             rechnungsnummer = entities["rechnungsnummer"][0]
             try:
-                api_url = f"http://127.0.0.1:5001/api/rechnung/{rechnungsnummer}"
+                api_url = f"{API_BASE}/api/rechnung/{rechnungsnummer}"
                 response = requests.get(api_url)
                 if response.status_code == 200:
                     daten = response.json()
@@ -293,7 +297,7 @@ def chat():
     if entities["rechnungsnummer"]:
         rechnungsnummer = entities["rechnungsnummer"][0]
         try:
-            api_url = f"http://127.0.0.1:5001/api/rechnung/{rechnungsnummer}"
+            api_url = f"{API_BASE}/api/rechnung/{rechnungsnummer}"
             response = requests.get(api_url)
             if response.status_code == 200:
                 daten = response.json()
@@ -598,6 +602,7 @@ def download_chatlog(filename):
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))  # Render gibt PORT vor
     app.run(host="0.0.0.0", port=port, debug=False)
+
 
 
 
