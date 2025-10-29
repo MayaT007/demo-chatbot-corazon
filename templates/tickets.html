@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <title>Ticket-Übersicht</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background: #ecf0f1;
+            padding: 20px;
+        }
+        table {
+            border-collapse: collapse;
+            width: 100%;
+            background: white;
+        }
+        th, td {
+            border: 1px solid #ccc;
+            padding: 10px;
+            text-align: left;
+            cursor: pointer;
+        }
+        th {
+            background: #A3B9D2;
+            color: white;
+        }
+        tr:nth-child(even) {
+            background: #f9f9f9;
+        }
+        .status-offen {
+            color: white;
+            background-color: #e74c3c;
+            padding: 5px 10px;
+            border-radius: 8px;
+            text-align: center;
+        }
+        .status-erledigt {
+            color: white;
+            background-color: #2ecc71;
+            padding: 5px 10px;
+            border-radius: 8px;
+            text-align: center;
+        }
+        h1 {
+            text-align: center;
+        }
+        .erledigen-btn {
+            background-color: #2ecc71;
+            color: white;
+            border: none;
+            padding: 5px 10px;
+            border-radius: 5px;
+            cursor: pointer;
+        }
+    </style>
+</head>
+<body>
+
+<h1>📋 Ticket-Übersicht</h1>
+
+<div style="text-align: center; margin-bottom: 20px;">
+    <a href="/download_tickets" class="erledigen-btn" download>📥 Tickets herunterladen</a>
+</div>
+
+{% if tickets %}
+
+<table id="ticketTable">
+    <thead>
+        <tr>
+            <th>Ticket-ID</th>
+            <th>Zeit</th>
+            <th>Absicht</th>
+            <th>Anfrage</th>
+            <th>Status</th>
+            <th>Aktion</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for ticket in tickets %}
+        <tr>
+            <td>{{ ticket["Ticket-ID"] }}</td>
+            <td>{{ ticket["Zeit"] }}</td>
+            <td>{{ ticket["Absicht"] }}</td>
+            <td>{{ ticket["Anfrage"] }}</td>
+            <td class="{{ 'status-offen' if ticket['Status'] == 'Offen' else 'status-erledigt' }}">{{ ticket["Status"] }}</td>
+            <td><button class="erledigen-btn" onclick="markErledigt(this)">✅ Erledigen</button></td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% else %}
+<p>Keine Tickets gefunden.</p>
+{% endif %}
+
+<script>
+    function markErledigt(button) {
+        const row = button.parentElement.parentElement;
+        const ticketId = row.children[0].innerText;
+    
+        fetch("/update_ticket", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ ticket_id: ticketId })
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                const statusCell = row.children[4];
+                statusCell.textContent = "Erledigt";
+                statusCell.className = "status-erledigt";
+                button.disabled = true;
+                button.innerText = "✔️ Erledigt";
+            } else {
+                alert("Fehler beim Aktualisieren des Tickets: " + data.message);
+            }
+        })
+        .catch(error => {
+            alert("Serverfehler beim Aktualisieren.");
+        });
+    }
+
+    // für automatische Sortierung:
+    document.addEventListener("DOMContentLoaded", () => {
+        const table = document.getElementById("ticketTable");
+        const tbody = table.querySelector("tbody");
+        const rows = Array.from(tbody.querySelectorAll("tr"));
+    
+        rows.sort((a, b) => {
+            return b.children[0].innerText.localeCompare(a.children[0].innerText) * -1;
+        });
+    
+        rows.forEach(row => tbody.appendChild(row));
+    });
+
+// Tabelle sortieren
+document.querySelectorAll("th").forEach(header => {
+    header.addEventListener("click", () => {
+        const table = header.parentElement.parentElement.parentElement;
+        const tbody = table.querySelector("tbody");
+        Array.from(tbody.querySelectorAll("tr"))
+            .sort((a, b) => a.children[header.cellIndex].innerText.localeCompare(b.children[header.cellIndex].innerText))
+            .forEach(tr => tbody.appendChild(tr));
+    });
+});
+</script>
+
+</body>
+</html>

@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <title>Chatlogs durchsuchen</title>
+    <style>
+        body { font-family: Arial, sans-serif; background: #ecf0f1; padding: 20px; }
+        h1 { text-align: center; }
+        form { text-align: center; margin-bottom: 20px; }
+        .chat-entry { background: white; padding: 10px; margin: 10px auto; width: 80%; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
+        .zeit { font-size: 0.9em; color: gray; }
+        .sender-benutzer { color: #3498db; }
+        .sender-maya { color: #2ecc71; }
+        mark { background: yellow; }
+        .download-link { text-align: center; margin-bottom: 20px; }
+    </style>
+</head>
+<body>
+
+<h1>📋 Chatlogs durchsuchen</h1>
+
+<form method="POST">
+    <label>Datei auswählen:</label>
+    <select name="datei" required>
+        {% for datei in chat_dateien %}
+            <option value="{{ datei }}" {% if datei == ausgewaehlte_datei %}selected{% endif %}>{{ datei }}</option>
+        {% endfor %}
+    </select>
+    <br><br>
+    <label>Suchbegriff eingeben:</label>
+    <input type="text" name="suchbegriff" placeholder="z.B. Mahnung..." required>
+    <br><br>
+    <button type="submit">🔍 Suchen</button>
+</form>
+
+{% if ausgewaehlte_datei %}
+<div class="download-link">
+    <a href="/download_chatlog/{{ ausgewaehlte_datei }}" class="erledigen-btn" download>📥 Aktuellen Chatlog herunterladen</a>
+</div>
+{% endif %}
+
+{% if ergebnisse %}
+    <h2 style="text-align: center;">Suchergebnisse:</h2>
+    {% for eintrag in ergebnisse %}
+        <div class="chat-entry">
+            <div class="zeit">{{ eintrag["zeit"] }}</div>
+            {% set nachricht = eintrag["nachricht"] %}
+{% set unterstrichen = nachricht|replace(suchbegriff, "<mark>" + suchbegriff + "</mark>") %}
+<div class="{% if eintrag['sender'] == 'Benutzer' %}sender-benutzer{% else %}sender-maya{% endif %}">
+    <strong>{{ eintrag["sender"] }}:</strong> {{ unterstrichen|safe }}
+</div>
+        </div>
+    {% endfor %}
+{% elif ausgewaehlte_datei %}
+    <p style="text-align: center;">🔍 Keine Treffer gefunden für die Suche!</p>
+{% endif %}
+
+</body>
+</html>
