@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 import os
 from fpdf import FPDF
 import re
-from fuzzywuzzy import fuzz
+from rapidfuzz import fuzz
 import csv 
 
 # Lade spaCy Modell
@@ -561,3 +561,4 @@ document.addEventListener('DOMContentLoaded', function() {
 
 if __name__ == "__main__":
     app.run(debug=True)
+
