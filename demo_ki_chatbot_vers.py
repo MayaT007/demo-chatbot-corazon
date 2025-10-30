@@ -2,6 +2,7 @@ import os
 import re
 import csv
 import json
+import string
 import requests
 import spacy
 from fpdf import FPDF
@@ -13,6 +14,7 @@ from flask import Flask, request, jsonify, send_file, render_template
 # Konfiguration
 # ---------------------------
 API_BASE = os.environ.get("INVOICE_API_URL", "").rstrip("/")
+print("DEBUG API_BASE:", API_BASE)  # hilft zu prüfen, ob ENV gesetzt ist
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -27,7 +29,6 @@ def load_nlp():
             return spacy.load("de_core_news_sm")
         except Exception:
             import spacy.cli
-
             spacy.cli.download("de_core_news_sm")
             return spacy.load("de_core_news_sm")
 
@@ -90,7 +91,6 @@ standard_antworten = {
 # PDF-Helfer
 # ---------------------------
 
-
 def erstelle_ratenplan_pdf(rechnungsnummer, gesamtschuld, monatsrate):
     dateiname = f"pdf_rechnungen/Ratenplan_{rechnungsnummer}.pdf"
     pdf = FPDF()
@@ -127,7 +127,7 @@ def erstelle_ratenplan_pdf(rechnungsnummer, gesamtschuld, monatsrate):
 
 
 def erstelle_pdf_rechnung(rechnungsnr, betrag, status):
-    """Kleine, fehlende Funktion ergänzt – wird von deinem Code aufgerufen."""
+    """PDF für Rechnungs-Download erzeugen."""
     dateiname = f"pdf_rechnungen/Rechnung_{rechnungsnr}.pdf"
     pdf = FPDF()
     pdf.add_page()
@@ -157,32 +157,62 @@ def erstelle_pdf_rechnung(rechnungsnr, betrag, status):
 
 
 # ---------------------------
-# NLU / Regeln
+# Normalisierung & NLU
 # ---------------------------
+
+def _norm(s: str) -> str:
+    if not s:
+        return ""
+    s = s.lower()
+    # Umlaute & ß vereinheitlichen
+    s = (s.replace("ä", "ae").replace("ö", "oe").replace("ü", "ue")
+           .replace("ß", "ss"))
+    # Satzzeichen weg
+    table = str.maketrans("", "", string.punctuation + "„“‚’»«")
+    s = s.translate(table)
+    s = " ".join(s.split())
+    return s
 
 
 def verstehe_absicht(text):
-    t = text.lower()
+    t = _norm(text)
 
-    # 1) Regeln (bewusst breit)
-    if any(w in t for w in ["ratenzahlung", "teilzahlung", "rate vereinbaren", "zahlungsplan", "in raten"]):
+    # Direkte Kurzbefehle / Buttontexte (ein Wort reicht)
+    quick_map = {
+        "rechnung": "rechnung_abfragen",
+        "rechnungsnummer": "rechnung_abfragen",
+        "zahlung pruefen": "zahlung_abfragen",
+        "zahlung": "zahlung_abfragen",
+        "mahnung": "mahnen",
+        "inkasso": "kontakt_mitarbeiter",   # ggf. eigener Intent, falls gewünscht
+        "teilzahlung": "zahlungsplan_angebot",
+        "ratenzahlung": "zahlungsplan_angebot",
+        "rate": "zahlungsplan_angebot",
+    }
+    if t in quick_map:
+        return quick_map[t]
+
+    # Regelbasierte Erkennung (breit und robust)
+    if any(w in t for w in ["inkasso", "inkasso fall", "inkassofall", "inkassounternehmen"]):
+        return "kontakt_mitarbeiter"
+    if any(w in t for w in ["ratenzahlung", "teilzahlung", "rate vereinbaren", "zahlungsplan", "in raten", "rate"]):
         return "zahlungsplan_angebot"
     if any(w in t for w in ["rechnung", "rechnungsnummer", "invoice", "bill"]):
         return "rechnung_abfragen"
-    if any(w in t for w in ["zahlung eingegangen", "zahlung bestätigt", "zahlung erfolgt", "habe bezahlt"]):
+    if any(w in t for w in ["zahlung eingegangen", "zahlung bestaetigt", "zahlung erfolgt", "habe bezahlt", "zahlung pruefen"]):
         return "zahlung_abfragen"
-    if any(w in t for w in ["mahnung", "mahnen", "zahlungserinnerung"]):
+    if any(w in t for w in ["mahnung", "mahnen", "zahlungserinnerung", "wann bekomme ich eine mahnung"]):
         return "mahnen"
     if any(w in t for w in ["punkte", "punktestand", "bonuspunkte"]):
         return "punkte_abfragen"
-    if any(w in t for w in ["adresse ändern", "anschrift ändern", "neue adresse", "adressänderung"]):
+    if any(w in t for w in ["adresse aendern", "anschrift aendern", "neue adresse", "adressaenderung"]):
         return "adresse_aendern"
     if any(w in t for w in ["mitarbeiter sprechen", "support kontaktieren", "callcenter", "mit mensch sprechen", "berater"]):
         return "kontakt_mitarbeiter"
-    if any(w in t for w in ["frist", "verlängerung", "aufschub", "zahlung verschieben"]):
+    if any(w in t for w in ["frist", "verlaengerung", "aufschub", "zahlung verschieben"]):
         return "zahlungsfrist_verlaengern"
 
-    # 2) Optional: Textklassifikation, nur wenn vorhanden
+    # ML nur, wenn Textklassifikations-Kategorien vorhanden sind
     try:
         doc = nlp(t)
         absichten = getattr(doc, "cats", None) or {}
@@ -197,7 +227,7 @@ def verstehe_absicht(text):
 
 
 def erkenne_entity(text):
-    """Beträge als float + Rechnungsnummern (5–10 Ziffern)."""
+    """Beträge als float + flexiblere Rechnungsnummer (z. B. R12345)."""
     betrag_matches = re.findall(r"\b\d{1,5}(?:[.,]\d{1,2})?\s*€?", text)
     betraege = []
     for m in betrag_matches:
@@ -207,26 +237,29 @@ def erkenne_entity(text):
         except ValueError:
             pass
 
-    rechnungsnummern = re.findall(r"\b\d{5,10}\b", text)
+    # erlaubt optionale 1–4 Buchstaben-Präfix + Bindestrich
+    rechnungsnummern = re.findall(r"\b(?:[A-Za-z]{1,4}-?)?\d{4,10}\b", text)
     return {"betrag": betraege, "rechnungsnummer": rechnungsnummern}
 
 
 def finde_aehnliche_frage(benutzertext):
-    benutzertext = benutzertext.strip().lower()
+    t = _norm(benutzertext)
+    best = None
+    best_score = 0
     for frage, antwort in faq_daten.items():
-        score = fuzz.partial_ratio(benutzertext, frage.lower())
-        if score > 75:  # toleranter
-            return antwort
-    return None
+        score = fuzz.token_set_ratio(t, _norm(frage))
+        if score > best_score:
+            best, best_score = antwort, score
+    return best if best_score >= 75 else None
 
 
 def erkenne_stimmung(text):
-    text = text.lower()
-    if any(w in text for w in ["schlimm", "verzweifelt", "hilfe", "weiß nicht weiter", "weiss nicht weiter", "problem", "ängstlich", "aengstlich"]):
+    text_l = text.lower()
+    if any(w in text_l for w in ["schlimm", "verzweifelt", "hilfe", "weiß nicht weiter", "weiss nicht weiter", "problem", "ängstlich", "aengstlich"]):
         return "traurig"
-    if any(w in text for w in ["wütend", "unverschämtheit", "schon 5x", "beschwerde", "sauer", "genervt"]):
+    if any(w in text_l for w in ["wütend", "unverschämtheit", "schon 5x", "beschwerde", "sauer", "genervt"]):
         return "frustriert"
-    if any(w in text for w in ["bitte", "guten tag", "hallo", "danke", "freundlich", "grüße"]):
+    if any(w in text_l for w in ["bitte", "guten tag", "hallo", "danke", "freundlich", "grüße"]):
         return "freundlich"
     return "neutral"
 
@@ -244,7 +277,6 @@ def stimmung_anpassen(antwort, stimmung):
 # ---------------------------
 # Speichern & Antworten
 # ---------------------------
-
 
 def speichere_chat(user_text, bot_text):
     heute = datetime.now().strftime("%Y%m%d")
@@ -289,11 +321,10 @@ def send_response(benutzertext, antwort, stimmung=None):
 # Routes
 # ---------------------------
 
-
 @app.route("/chat", methods=["POST"])
 def chat():
     daten = request.get_json()
-    benutzertext = (daten.get("nachricht") or "").lower()
+    benutzertext = (daten.get("nachricht") or "").strip()
     user_id = daten.get("user_id", "default")
 
     stimmung = erkenne_stimmung(benutzertext)
@@ -315,11 +346,12 @@ def chat():
     status["last_activity"] = jetzt
 
     # Sprachumschaltung
-    if "sprache englisch" in benutzertext or "language english" in benutzertext:
+    lt = benutzertext.lower()
+    if "sprache englisch" in lt or "language english" in lt:
         benutzer_status[user_id]["sprache"] = "en"
         return send_response(benutzertext, "✅ Language switched to English. How can I assist you?", stimmung)
 
-    if "sprache deutsch" in benutzertext or "language german" in benutzertext:
+    if "sprache deutsch" in lt or "language german" in lt:
         benutzer_status[user_id]["sprache"] = "de"
         return send_response(benutzertext, "✅ Sprache auf Deutsch gewechselt. Wie kann ich Ihnen helfen?", stimmung)
 
@@ -331,10 +363,12 @@ def chat():
         return send_response(benutzertext, text, stimmung)
 
     # PDF-Download
-    if "herunterladen" in benutzertext and "rechnung" in benutzertext:
+    if "herunterladen" in lt and "rechnung" in lt:
         if entities["rechnungsnummer"]:
             rechnungsnummer = entities["rechnungsnummer"][0]
             try:
+                if not API_BASE:
+                    raise RuntimeError("INVOICE_API_URL ist nicht gesetzt.")
                 api_url = f"{API_BASE}/api/rechnung/{rechnungsnummer}"
                 response = requests.get(api_url, timeout=10)
                 if response.status_code == 200:
@@ -359,6 +393,8 @@ def chat():
     if entities["rechnungsnummer"]:
         rechnungsnummer = entities["rechnungsnummer"][0]
         try:
+            if not API_BASE:
+                raise RuntimeError("INVOICE_API_URL ist nicht gesetzt.")
             api_url = f"{API_BASE}/api/rechnung/{rechnungsnummer}"
             response = requests.get(api_url, timeout=10)
             if response.status_code == 200:
@@ -381,43 +417,37 @@ def chat():
         betraege = entities.get("betrag", [])
         if betraege:
             monatliche_rate = betraege[0]
-            try:
-                if monatliche_rate < 30:
-                    status["status"] = "warte_auf_vorschlagsrate"
-                    status["vorschlaege"] = [30, 40, 50]
-                    antwort = {
-                        "de": "❗ Die monatliche Rate ist zu niedrig.\n💬 Vorschläge: 30€, 40€, 50€.\nBitte wählen Sie einen Betrag aus.",
-                        "en": "❗ The monthly installment is too low.\n💬 Suggestions: 30€, 40€, 50€.\nPlease choose an amount.",
-                    }[benutzer_status[user_id]["sprache"]]
-                else:
-                    gesamtschuld = 300.0
-                    laufzeit_monate = int(gesamtschuld // monatliche_rate)
-                    if gesamtschuld % monatliche_rate > 0:
-                        laufzeit_monate += 1
-
-                    rechnungsnummer = "RATENPLAN_" + datetime.now().strftime("%Y%m%d%H%M%S")
-                    pdf_dateiname = erstelle_ratenplan_pdf(rechnungsnummer, gesamtschuld, monatliche_rate)
-                    download_link = "/download/" + os.path.basename(pdf_dateiname)
-
-                    antworten = {
-                        "de": (
-                            f"✅ Ihr Zahlungsplan mit {monatliche_rate:.2f}€/Monat wurde vorgemerkt.<br>"
-                            f"Voraussichtliche Laufzeit: {laufzeit_monate} Monate.<br><br>"
-                            f'<a href="{download_link}" style="display:inline-block; background-color:#e74c3c; color:white; padding:8px 16px; text-align:center; text-decoration:none; font-size:14px; border-radius:12px;">📄 Ratenplan herunterladen</a>'
-                        ),
-                        "en": (
-                            f"✅ Your installment plan with {monatliche_rate:.2f}€/month has been noted.<br>"
-                            f"Expected duration: {laufzeit_monate} months.<br><br>"
-                            f'<a href="{download_link}" style="display:inline-block; background-color:#e74c3c; color:white; padding:8px 16px; text-align:center; text-decoration:none; font-size:14px; border-radius:12px;">📄 Download Installment Plan</a>'
-                        ),
-                    }
-                    antwort = antworten[benutzer_status[user_id]["sprache"]]
-                    status["status"] = "normal"
-            except ValueError:
+            if monatliche_rate < 30:
+                status["status"] = "warte_auf_vorschlagsrate"
+                status["vorschlaege"] = [30, 40, 50]
                 antwort = {
-                    "de": "❗ Ungültiger Betrag. Bitte geben Sie eine Zahl an (z. B. 50).",
-                    "en": "❗ Invalid amount. Please enter a number (e.g., 50).",
+                    "de": "❗ Die monatliche Rate ist zu niedrig.\n💬 Vorschläge: 30€, 40€, 50€.\nBitte wählen Sie einen Betrag aus.",
+                    "en": "❗ The monthly installment is too low.\n💬 Suggestions: 30€, 40€, 50€.\nPlease choose an amount.",
                 }[benutzer_status[user_id]["sprache"]]
+            else:
+                gesamtschuld = 300.0
+                laufzeit_monate = int(gesamtschuld // monatliche_rate)
+                if gesamtschuld % monatliche_rate > 0:
+                    laufzeit_monate += 1
+
+                rechnungsnummer = "RATENPLAN_" + datetime.now().strftime("%Y%m%d%H%M%S")
+                pdf_dateiname = erstelle_ratenplan_pdf(rechnungsnummer, gesamtschuld, monatliche_rate)
+                download_link = "/download/" + os.path.basename(pdf_dateiname)
+
+                antworten = {
+                    "de": (
+                        f"✅ Ihr Zahlungsplan mit {monatliche_rate:.2f}€/Monat wurde vorgemerkt.<br>"
+                        f"Voraussichtliche Laufzeit: {laufzeit_monate} Monate.<br><br>"
+                        f'<a href="{download_link}" style="display:inline-block; background-color:#e74c3c; color:white; padding:8px 16px; text-align:center; text-decoration:none; font-size:14px; border-radius:12px;">📄 Ratenplan herunterladen</a>'
+                    ),
+                    "en": (
+                        f"✅ Your installment plan with {monatliche_rate:.2f}€/month has been noted.<br>"
+                        f"Expected duration: {laufzeit_monate} months.<br><br>"
+                        f'<a href="{download_link}" style="display:inline-block; background-color:#e74c3c; color:white; padding:8px 16px; text-align:center; text-decoration:none; font-size:14px; border-radius:12px;">📄 Download Installment Plan</a>'
+                    ),
+                }
+                antwort = antworten[benutzer_status[user_id]["sprache"]]
+                status["status"] = "normal"
         else:
             antwort = {
                 "de": "❗ Bitte geben Sie eine gültige Monatsrate in Euro an.",
