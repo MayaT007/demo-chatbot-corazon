@@ -14,10 +14,9 @@ from flask import Flask, request, jsonify, send_file, render_template
 # Konfiguration
 # ---------------------------
 API_BASE = os.environ.get("INVOICE_API_URL", "").rstrip("/")
-print("DEBUG API_BASE:", API_BASE)  # hilft zu prüfen, ob ENV gesetzt ist
+print("DEBUG API_BASE:", API_BASE)  # hilft im Render-Log
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-
 
 def load_nlp():
     """Lade eigenes spaCy-Modell; fallback auf de_core_news_sm (mit sicherem Download)."""
@@ -32,13 +31,12 @@ def load_nlp():
             spacy.cli.download("de_core_news_sm")
             return spacy.load("de_core_news_sm")
 
-
 nlp = load_nlp()
 
 app = Flask(__name__)
 app.secret_key = "geheimeschluessel"
 
-# Persistenzordner (ephemer auf Render, aber okay)
+# Persistenzordner
 os.makedirs("chat_logs", exist_ok=True)
 os.makedirs("pdf_rechnungen", exist_ok=True)
 os.makedirs("tickets", exist_ok=True)
@@ -125,7 +123,6 @@ def erstelle_ratenplan_pdf(rechnungsnummer, gesamtschuld, monatsrate):
     pdf.output(dateiname)
     return dateiname
 
-
 def erstelle_pdf_rechnung(rechnungsnr, betrag, status):
     """PDF für Rechnungs-Download erzeugen."""
     dateiname = f"pdf_rechnungen/Rechnung_{rechnungsnr}.pdf"
@@ -155,36 +152,30 @@ def erstelle_pdf_rechnung(rechnungsnr, betrag, status):
     pdf.output(dateiname)
     return dateiname
 
-
 # ---------------------------
 # Normalisierung & NLU
 # ---------------------------
 
 def _norm(s: str) -> str:
-    if not s:
-        return ""
+    if not s: return ""
     s = s.lower()
     # Umlaute & ß vereinheitlichen
-    s = (s.replace("ä", "ae").replace("ö", "oe").replace("ü", "ue")
-           .replace("ß", "ss"))
-    # Satzzeichen weg
-    table = str.maketrans("", "", string.punctuation + "„“‚’»«")
-    s = s.translate(table)
-    s = " ".join(s.split())
-    return s
-
+    s = (s.replace("ä", "ae").replace("ö", "oe").replace("ü", "ue").replace("ß", "ss"))
+    # Satzzeichen entfernen
+    s = s.translate(str.maketrans("", "", string.punctuation + "„“‚’»«"))
+    return " ".join(s.split())
 
 def verstehe_absicht(text):
     t = _norm(text)
 
-    # Direkte Kurzbefehle / Buttontexte (ein Wort reicht)
+    # Ein-Wort / Button-Shortcuts
     quick_map = {
         "rechnung": "rechnung_abfragen",
         "rechnungsnummer": "rechnung_abfragen",
-        "zahlung pruefen": "zahlung_abfragen",
         "zahlung": "zahlung_abfragen",
+        "zahlung pruefen": "zahlung_abfragen",
         "mahnung": "mahnen",
-        "inkasso": "kontakt_mitarbeiter",   # ggf. eigener Intent, falls gewünscht
+        "inkasso": "kontakt_mitarbeiter",
         "teilzahlung": "zahlungsplan_angebot",
         "ratenzahlung": "zahlungsplan_angebot",
         "rate": "zahlungsplan_angebot",
@@ -192,7 +183,15 @@ def verstehe_absicht(text):
     if t in quick_map:
         return quick_map[t]
 
-    # Regelbasierte Erkennung (breit und robust)
+    # Smalltalk
+    if any(p in t for p in ["wie geht", "wie gehts", "wie geht es dir", "alles gut"]):
+        return "smalltalk_howareyou"
+    if any(p in t for p in ["hallo", "hi", "hey", "guten tag", "moin", "servus"]):
+        return "smalltalk_hello"
+    if any(p in t for p in ["danke", "vielen dank", "thx"]):
+        return "smalltalk_thanks"
+
+    # Regelbasierte Erkennung (breiter)
     if any(w in t for w in ["inkasso", "inkasso fall", "inkassofall", "inkassounternehmen"]):
         return "kontakt_mitarbeiter"
     if any(w in t for w in ["ratenzahlung", "teilzahlung", "rate vereinbaren", "zahlungsplan", "in raten", "rate"]):
@@ -212,7 +211,7 @@ def verstehe_absicht(text):
     if any(w in t for w in ["frist", "verlaengerung", "aufschub", "zahlung verschieben"]):
         return "zahlungsfrist_verlaengern"
 
-    # ML nur, wenn Textklassifikations-Kategorien vorhanden sind
+    # ML-Fallback (nur wenn Kategorien vorhanden)
     try:
         doc = nlp(t)
         absichten = getattr(doc, "cats", None) or {}
@@ -225,7 +224,6 @@ def verstehe_absicht(text):
 
     return "unbekannt"
 
-
 def erkenne_entity(text):
     """Beträge als float + flexiblere Rechnungsnummer (z. B. R12345)."""
     betrag_matches = re.findall(r"\b\d{1,5}(?:[.,]\d{1,2})?\s*€?", text)
@@ -237,10 +235,9 @@ def erkenne_entity(text):
         except ValueError:
             pass
 
-    # erlaubt optionale 1–4 Buchstaben-Präfix + Bindestrich
+    # optionaler 1–4 Buchstaben-Präfix + Bindestrich
     rechnungsnummern = re.findall(r"\b(?:[A-Za-z]{1,4}-?)?\d{4,10}\b", text)
     return {"betrag": betraege, "rechnungsnummer": rechnungsnummern}
-
 
 def finde_aehnliche_frage(benutzertext):
     t = _norm(benutzertext)
@@ -252,7 +249,6 @@ def finde_aehnliche_frage(benutzertext):
             best, best_score = antwort, score
     return best if best_score >= 75 else None
 
-
 def erkenne_stimmung(text):
     text_l = text.lower()
     if any(w in text_l for w in ["schlimm", "verzweifelt", "hilfe", "weiß nicht weiter", "weiss nicht weiter", "problem", "ängstlich", "aengstlich"]):
@@ -263,7 +259,6 @@ def erkenne_stimmung(text):
         return "freundlich"
     return "neutral"
 
-
 def stimmung_anpassen(antwort, stimmung):
     if stimmung == "frustriert":
         antwort += " 🙏 Ich verstehe Ihren Ärger. Ich kümmere mich sofort darum!"
@@ -272,7 +267,6 @@ def stimmung_anpassen(antwort, stimmung):
     elif stimmung == "freundlich":
         antwort += " 😊 Vielen Dank für Ihre freundliche Anfrage."
     return antwort
-
 
 # ---------------------------
 # Speichern & Antworten
@@ -308,18 +302,31 @@ def speichere_chat(user_text, bot_text):
     with open(dateiname, "w", encoding="utf-8") as f:
         json.dump(daten, f, indent=4, ensure_ascii=False)
 
-
 def send_response(benutzertext, antwort, stimmung=None):
-    """Zentraler Hook: Empathie immer hier anwenden, dann speichern & senden."""
+    """Zentraler Hook: Empathie hier anwenden, dann speichern & senden."""
     if stimmung is not None:
         antwort = stimmung_anpassen(antwort, stimmung)
     speichere_chat(benutzertext, antwort)
     return jsonify({"antwort": antwort})
 
-
 # ---------------------------
 # Routes
 # ---------------------------
+
+def ticket_erstellen(benutzertext, absicht):
+    try:
+        os.makedirs('tickets', exist_ok=True)
+        ticket_id = datetime.now().strftime("%Y%m%d-%H%M%S")
+        timestamp = datetime.now().strftime("%d.%m.%Y %H:%M")
+        ticket_datei = "tickets/tickets.csv"
+        neu = not os.path.exists(ticket_datei)
+        with open(ticket_datei, mode='a', newline='', encoding='utf-8') as file:
+            writer = csv.writer(file)
+            if neu:
+                writer.writerow(["Ticket-ID", "Zeit", "Absicht", "Anfrage", "Status"])
+            writer.writerow([ticket_id, timestamp, absicht, benutzertext, "Offen"])
+    except Exception as e:
+        print("WARN ticket_erstellen:", e)
 
 @app.route("/chat", methods=["POST"])
 def chat():
@@ -358,8 +365,7 @@ def chat():
     # FAQ
     faq_antwort = finde_aehnliche_frage(benutzertext)
     if faq_antwort:
-        text = faq_antwort[benutzer_status[user_id]["sprache"]]
-        text = "Gerne. " + text
+        text = "Gerne. " + faq_antwort[benutzer_status[user_id]["sprache"]]
         return send_response(benutzertext, text, stimmung)
 
     # PDF-Download
@@ -412,7 +418,6 @@ def chat():
     # ---------------------------
     # Zustandsmaschine: Ratenzahlung
     # ---------------------------
-
     if status["status"] == "warte_auf_monatsrate":
         betraege = entities.get("betrag", [])
         if betraege:
@@ -539,6 +544,25 @@ def chat():
             "en": "🏡 Please fill out our address change form.",
         }[benutzer_status[user_id]["sprache"]]
 
+    # Smalltalk-Intents
+    elif absicht == "smalltalk_hello":
+        antwort = {
+            "de": "👋 Hallo! Schön, dass Sie da sind. Wobei darf ich helfen – Rechnung, Zahlung oder Ratenplan?",
+            "en": "👋 Hi! Great to have you here. How can I help—invoice, payment, or installment plan?",
+        }[benutzer_status[user_id]["sprache"]]
+
+    elif absicht == "smalltalk_howareyou":
+        antwort = {
+            "de": "😊 Danke, mir geht’s gut! Ich bin bereit zu helfen. Geht es um eine Rechnung, eine Zahlung oder eine Mahnung?",
+            "en": "😊 I'm doing well—thanks! I'm ready to help. Is it about an invoice, a payment, or a reminder?",
+        }[benutzer_status[user_id]["sprache"]]
+
+    elif absicht == "smalltalk_thanks":
+        antwort = {
+            "de": "Gern geschehen! 🤝 Wenn noch etwas offen ist, sagen Sie kurz Bescheid.",
+            "en": "You're welcome! 🤝 If anything else is needed, just tell me.",
+        }[benutzer_status[user_id]["sprache"]]
+
     else:
         antwort = {
             "de": "❓ Ich habe Ihre Anfrage leider nicht genau verstanden.",
@@ -547,12 +571,10 @@ def chat():
 
     return send_response(benutzertext, antwort, stimmung)
 
-
 @app.route("/download/<path:filename>")
 def download_file(filename):
     pfad = os.path.join("pdf_rechnungen", filename)
     return send_file(pfad, as_attachment=True)
-
 
 @app.route("/")
 def index():
@@ -560,7 +582,6 @@ def index():
         "Willkommen! Ich bin Maya, Ihre KI-Assistentin. Ich helfe Ihnen bei Rechnungen, Inkasso und Mahnungen."
     )
     return render_template("index.html", begruessungstext=begruessungstext)
-
 
 @app.route("/tickets")
 def tickets_dashboard():
@@ -571,7 +592,6 @@ def tickets_dashboard():
             reader = csv.DictReader(file)
             tickets = list(reader)
     return render_template("tickets.html", tickets=tickets)
-
 
 @app.route("/update_ticket", methods=["POST"])
 def update_ticket():
@@ -606,7 +626,6 @@ def update_ticket():
     else:
         return jsonify({"success": False, "message": "Ticket nicht gefunden."}), 404
 
-
 @app.route("/download_tickets")
 def download_tickets():
     ticket_datei = "tickets/tickets.csv"
@@ -614,7 +633,6 @@ def download_tickets():
         return send_file(ticket_datei, as_attachment=True)
     else:
         return "Keine Tickets vorhanden.", 404
-
 
 @app.route("/chatlogs", methods=["GET", "POST"])
 def chatlogs():
@@ -647,7 +665,6 @@ def chatlogs():
         suchbegriff=suchbegriff,
     )
 
-
 @app.route("/download_chatlog/<filename>")
 def download_chatlog(filename):
     pfad = os.path.join("chat_logs", filename)
@@ -655,7 +672,6 @@ def download_chatlog(filename):
         return send_file(pfad, as_attachment=True)
     else:
         return "Datei nicht gefunden.", 404
-
 
 # ---------------------------
 # Main
